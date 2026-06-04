@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Vokabeln" />
+  <title>Vokabeln</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: 'DM Sans', 'Helvetica Neue', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, label { font-family: inherit; }
+    button { cursor: pointer; border: none; background: none; }
+    button:active { transform: scale(0.97); }
+    input:focus { outline: none; }
+
+    #app { min-height: 100vh; transition: background .3s; }
+    .inner { max-width: 420px; margin: 0 auto; padding: 48px 20px 100px; }
+
+    /* typography */
+    .serif { font-family: 'DM Serif Display', serif; }
+
+    /* flip card */
+    .flip-wrap { perspective: 900px; width: 100%; height: 200px; cursor: pointer; }
+    .flip-inner { position: relative; width: 100%; height: 100%; transform-style: preserve-3d; transition: transform .45s cubic-bezier(.4,0,.2,1); }
+    .flip-inner.flipped { transform: rotateY(180deg); }
+    .flip-face { position: absolute; inset: 0; backface-visibility: hidden; border-radius: 20px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 28px; text-align: center; }
+    .flip-back { transform: rotateY(180deg); }
+
+    /* toast */
+    .toast {
+      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+      padding: 10px 22px; border-radius: 30px; font-size: 13px; font-weight: 600;
+      z-index: 999; animation: tin .25s ease; white-space: nowrap;
+      box-shadow: 0 4px 20px rgba(0,0,0,.08);
+    }
+    @keyframes tin { from { opacity:0; bottom:10px; } to { opacity:1; bottom:28px; } }
+
+    /* toggle switch */
+    .toggle-track { width: 38px; height: 22px; border-radius: 11px; cursor: pointer; position: relative; transition: background .2s; }
+    .toggle-thumb { position: absolute; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .2s; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+
+    /* progress bar */
+    .progress-bg { height: 4px; border-radius: 4px; margin-bottom: 24px; }
+    .progress-fill { height: 100%; border-radius: 4px; transition: width .4s; }
+
+    /* bar chart */
+    .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 5px; height: 100%; }
+    .bar-stack { flex: 1; width: 100%; display: flex; flex-direction: column; justify-content: flex-end; }
+
+    /* utility */
+    .row { display: flex; gap: 8px; }
+    .col { display: flex; flex-direction: column; gap: 10px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+    .sep { height: 1px; margin: 20px 0; opacity: .7; }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+// ─── State & Storage ────────────────────────────────────────────
+const KEY = { decks: 'vk_decks_v3', stats: 'vk_stats_v3', theme: 'vk_theme_v3' };
+const load = (k, fb) => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : fb; } catch { return fb; } };
+const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const uid  = () => Math.random().toString(36).slice(2, 9);
+const today = () => new Date().toISOString().slice(0, 10);
+
+// ─── Themes ─────────────────────────────────────────────────────
+const THEMES = [
+  { id:'rose',   label:'Rose',   bg:'#FDF6F0', surface:'#FFF8F5', accent:'#C9837A', muted:'#E8C5C1', text:'#3D2926', sub:'#9A7370' },
+  { id:'sage',   label:'Sage',   bg:'#F4F7F4', surface:'#FAFCFA', accent:'#7A9E87', muted:'#C4D9CA', text:'#253028', sub:'#6B877A' },
+  { id:'powder', label:'Powder', bg:'#F3F6FB', surface:'#F8FAFD', accent:'#7A97C9', muted:'#C0CFEA', text:'#1E2A40', sub:'#627899' },
+  { id:'sand',   label:'Sand',   bg:'#F8F5F0', surface:'#FDFBF8', accent:'#B89A72', muted:'#DDD0BC', text:'#322616', sub:'#897560' },
+  { id:'lilac',  label:'Lilac',  bg:'#F7F4FB', surface:'#FBF9FE', accent:'#9B80C4', muted:'#D4C6EC', text:'#261D38', sub:'#7B6899' },
+  { id:'stone',  label:'Stone',  bg:'#F5F5F4', surface:'#FAFAF9', accent:'#888580', muted:'#D0CECC', text:'#1C1B1A', sub:'#72706E' },
+];
+
+// ─── App State ───────────────────────────────────────────────────
+let state = {
+  decks:       load(KEY.decks, []),
+  stats:       load(KEY.stats, {}),
+  themeId:     load(KEY.theme, 'rose'),
+  view:        'home',       // home | addDeck | manage | study | stats | settings
+  activeDeckId: null,
+  newDeck:     { name:'', lang1:'', lang2:'' },
+  newCard:     { front:'', back:'' },
+  // study
+  cardIdx:     0,
+  flipped:     false,
+  typingMode:  false,
+  typed:       '',
+  checked:     false,
+  correct:     null,
+};
+
+const T = () => THEMES.find(t => t.id === state.themeId) || THEMES[0];
+const deck  = () => state.decks.find(d => d.id === state.activeDeckId);
+const card  = () => deck()?.cards?.[state.cardIdx];
+
+function setState(patch) {
+  Object.assign(state, patch);
+  render();
+}
+
+// ─── Persist ────────────────────────────────────────────────────
+function persist() {
+  save(KEY.decks,  state.decks);
+  save(KEY.stats,  state.stats);
+  save(KEY.theme,  state.themeId);
+}
+
+// ─── Toast ──────────────────────────────────────────────────────
+let toastTimer;
+function flash(msg) {
+  const old = document.querySelector('.toast');
+  if (old) old.remove();
+  clearTimeout(toastTimer);
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  const t = T();
+  el.style.cssText = `background:${t.surface};color:${t.text};border:1px solid ${t.muted}`;
+  document.body.appendChild(el);
+  toastTimer = setTimeout(() => el.remove(), 2200);
+}
+
+// ─── Stats ──────────────────────────────────────────────────────
+function recordAnswer(ok) {
+  const k = today();
+  const day = state.stats[k] || { seen:0, correct:0 };
+  state.stats = { ...state.stats, [k]: { seen: day.seen+1, correct: day.correct+(ok?1:0) } };
+  save(KEY.stats, state.stats);
+}
+
+function allTimeStats() {
+  let seen=0, correct=0;
+  Object.values(state.stats).forEach(d => { seen+=d.seen; correct+=d.correct; });
+  return { seen, correct };
+}
+
+function last7() {
+  const days = [];
+  for (let i=6; i>=0; i--) {
+    const d = new Date(); d.setDate(d.getDate()-i);
+    const k = d.toISOString().slice(0,10);
+    days.push({ label: d.toLocaleDateString('de',{weekday:'short'}), ...(state.stats[k]||{seen:0,correct:0}) });
+  }
+  return days;
+}
+
+// ─── Actions ────────────────────────────────────────────────────
+function createDeck() {
+  const {name,lang1,lang2} = state.newDeck;
+  if (!name.trim()||!lang1.trim()||!lang2.trim()) return;
+  state.decks = [...state.decks, { id:uid(), name:name.trim(), lang1:lang1.trim(), lang2:lang2.trim(), cards:[] }];
+  state.newDeck = {name:'',lang1:'',lang2:''};
+  persist();
+  flash('Deck erstellt');
+  setState({ view:'home' });
+}
+
+function deleteDeck(id) {
+  state.decks = state.decks.filter(d => d.id !== id);
+  persist();
+  flash('Deck gelöscht');
+  render();
+}
+
+function addCard() {
+  const {front,back} = state.newCard;
+  if (!front.trim()||!back.trim()) return;
+  state.decks = state.decks.map(d => d.id === state.activeDeckId
+    ? {...d, cards:[...d.cards, {id:uid(), front:front.trim(), back:back.trim()}]}
+    : d);
+  state.newCard = {front:'',back:''};
+  persist();
+  flash('Karte gespeichert');
+  render();
+}
+
+function deleteCard(deckId, cardId) {
+  state.decks = state.decks.map(d => d.id===deckId ? {...d, cards:d.cards.filter(c=>c.id!==cardId)} : d);
+  persist();
+  render();
+}
+
+function startStudy(d) {
+  setState({ activeDeckId:d.id, cardIdx:0, flipped:false, typed:'', checked:false, correct:null, view:'study' });
+}
+
+function advance(dir) {
+  const d = deck();
+  setState({ flipped:false, typed:'', checked:false, correct:null });
+  setTimeout(() => {
+    if (dir==='rand') setState({ cardIdx: Math.floor(Math.random()*d.cards.length) });
+    else setState({ cardIdx: (state.cardIdx+dir+d.cards.length)%d.cards.length });
+  }, 120);
+}
+
+function checkTyped() {
+  const c = card();
+  const ok = state.typed.trim().toLowerCase() === c.back.trim().toLowerCase();
+  recordAnswer(ok);
+  setState({ correct:ok, checked:true });
+}
+
+function exportDecks() {
+  const data = JSON.stringify({ version:1, decks:state.decks }, null, 2);
+  const blob = new Blob([data], { type:'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `vokabeln_${today()}.json`; a.click();
+  URL.revokeObjectURL(url);
+  flash('Exportiert');
+}
+
+function importDecks(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const parsed = JSON.parse(ev.target.result);
+      const imported = parsed.decks || parsed;
+      if (!Array.isArray(imported)) { flash('Ungültige Datei'); return; }
+      const existingIds = new Set(state.decks.map(d=>d.id));
+      const newDecks = imported.filter(d=>!existingIds.has(d.id));
+      state.decks = [...state.decks, ...newDecks];
+      persist();
+      flash(`${newDecks.length} Deck(s) importiert`);
+      render();
+    } catch { flash('Fehler beim Importieren'); }
+  };
+  reader.readAsText(file);
+  e.target.value='';
+}
+
+// ─── HTML Helpers ────────────────────────────────────────────────
+const h = (tag, attrs={}, ...children) => {
+  const el = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)) {
+    if (k==='style' && typeof v==='object') Object.assign(el.style, v);
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
+    else el.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c==null||c===false) continue;
+    el.append(typeof c==='string'||typeof c==='number' ? document.createTextNode(c) : c);
+  }
+  return el;
+};
+const div  = (a,...c) => h('div',a,...c);
+const p    = (a,...c) => h('p',a,...c);
+const btn  = (a,...c) => h('button',a,...c);
+const inp  = (a)      => h('input',a);
+const span = (a,...c) => h('span',a,...c);
+
+function styledBtn(variant, extra, label) {
+  const t = T();
+  const base = { border:'none', cursor:'pointer', borderRadius:'14px',
+    fontFamily:'inherit', fontWeight:'600', fontSize:'14px',
+    transition:'all .15s', letterSpacing:'0.1px', padding:'11px 20px' };
+  const vars = {
+    primary: { background:t.accent, color:'#fff' },
+    ghost:   { background:'transparent', color:t.sub, border:`1px solid ${t.muted}` },
+    danger:  { background:'transparent', color:'#C0635B', border:'1px solid #E8C0BD' },
+  };
+  return btn({ style:{ ...base, ...(vars[variant]||{}), ...extra } }, label);
+}
+
+function styledInput(placeholder, value, onInput, onEnter) {
+  const t = T();
+  const el = inp({ type:'text', placeholder, value,
+    style:{ width:'100%', padding:'12px 15px', borderRadius:'12px',
+      border:`1px solid ${t.muted}`, background:t.surface, color:t.text,
+      fontSize:'14px', transition:'border .15s' } });
+  el.addEventListener('input', e => onInput(e.target.value));
+  if (onEnter) el.addEventListener('keydown', e => e.key==='Enter' && onEnter());
+  el.addEventListener('focus', () => el.style.borderColor = t.accent);
+  el.addEventListener('blur',  () => el.style.borderColor = t.muted);
+  return el;
+}
+
+function card$(extra={}) {
+  const t = T();
+  return div({ style:{ background:t.surface, borderRadius:'18px',
+    border:`1px solid ${t.muted}`, padding:'18px 20px', ...extra } });
+}
+
+function backBtn(label, onClick) {
+  const t = T();
+  const b = btn({ style:{ display:'flex', alignItems:'center', gap:'6px',
+    background:'transparent', border:'none', cursor:'pointer',
+    color:t.sub, fontSize:'13px', fontWeight:'600', padding:'0 0 24px' } }, label);
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function label$(text) {
+  const t = T();
+  return p({ style:{ fontSize:'12px', fontWeight:'600', color:t.sub,
+    letterSpacing:'0.8px', textTransform:'uppercase', marginBottom:'14px' } }, text);
+}
+
+// ─── Views ──────────────────────────────────────────────────────
+
+function viewHome() {
+  const t = T();
+  const wrap = div({ style:{} });
+
+  // top row
+  const topRow = div({ style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' } });
+  topRow.append(
+    p({ style:{ fontSize:'13px', color:t.sub, fontWeight:'500' } }, `${state.decks.length} ${state.decks.length===1?'Deck':'Decks'}`),
+  );
+  const nb = styledBtn('primary', { padding:'9px 18px' }, '+ Neues Deck');
+  nb.addEventListener('click', () => setState({ view:'addDeck' }));
+  topRow.append(nb);
+  wrap.append(topRow);
+
+  if (state.decks.length === 0) {
+    const empty = card$({ textAlign:'center', padding:'48px 20px' });
+    empty.append(p({ style:{ color:t.sub, fontSize:'14px', lineHeight:'1.7' } }, 'Noch keine Decks vorhanden.\nErstelle dein erstes Deck.'));
+    wrap.append(empty);
+  }
+
+  state.decks.forEach(d => {
+    const row = div({ style:{ background:t.surface, borderRadius:'16px', padding:'16px 18px',
+      marginBottom:'10px', border:`1px solid ${t.muted}`, cursor:'pointer', transition:'all .15s' } });
+
+    const top = div({ style:{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' } });
+    const left = div({});
+    left.append(p({ style:{ fontWeight:'600', fontSize:'16px', marginBottom:'5px' } }, d.name));
+    const pills = div({ style:{ display:'flex', gap:'6px', alignItems:'center' } });
+    const pillStyle = { display:'inline-block', padding:'4px 12px', borderRadius:'30px',
+      fontSize:'12px', fontWeight:'600', background:'transparent', color:t.sub, border:`1px solid ${t.muted}` };
+    pills.append(span({ style:pillStyle }, d.lang1));
+    pills.append(span({ style:{ color:t.sub, fontSize:'11px' } }, '↔'));
+    pills.append(span({ style:pillStyle }, d.lang2));
+    left.append(pills);
+    top.append(left);
+    top.append(span({ style:{ color:t.sub, fontSize:'13px' } }, `${d.cards.length} Karten`));
+    row.append(top);
+
+    const btns = div({ style:{ display:'flex', gap:'8px', marginTop:'14px' } });
+    const editB = styledBtn('ghost', { flex:'1', fontSize:'13px' }, 'Bearbeiten');
+    editB.addEventListener('click', () => setState({ activeDeckId:d.id, view:'manage' }));
+    btns.append(editB);
+    if (d.cards.length > 0) {
+      const learnB = styledBtn('primary', { flex:'1', fontSize:'13px' }, 'Lernen');
+      learnB.addEventListener('click', () => startStudy(d));
+      btns.append(learnB);
+    }
+    const delB = styledBtn('danger', { padding:'11px 14px' }, '✕');
+    delB.addEventListener('click', () => deleteDeck(d.id));
+    btns.append(delB);
+    row.append(btns);
+    wrap.append(row);
+  });
+
+  return wrap;
+}
+
+function viewAddDeck() {
+  const t = T();
+  const wrap = div({});
+  wrap.append(backBtn('← Zurück', () => setState({ view:'home' })));
+  wrap.append(p({ style:{ fontSize:'22px', fontWeight:'700', marginBottom:'24px' } }, 'Neues Deck'));
+
+  const col = div({ style:{ display:'flex', flexDirection:'column', gap:'12px' } });
+  const nameI  = styledInput('Name',            state.newDeck.name,  v => state.newDeck.name  = v);
+  const grid   = div({ style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px' } });
+  const lang1I = styledInput('Sprache vorne',   state.newDeck.lang1, v => state.newDeck.lang1 = v);
+  const lang2I = styledInput('Sprache hinten',  state.newDeck.lang2, v => state.newDeck.lang2 = v);
+  grid.append(lang1I, lang2I);
+
+  const createB = styledBtn('primary', { padding:'13px', fontSize:'15px', marginTop:'4px' }, 'Erstellen');
+  createB.addEventListener('click', createDeck);
+
+  col.append(nameI, grid, createB);
+  wrap.append(col);
+  return wrap;
+}
+
+function viewManage() {
+  const t = T();
+  const d = deck();
+  if (!d) return div({});
+  const wrap = div({});
+  wrap.append(backBtn('← Zurück', () => setState({ view:'home' })));
+  wrap.append(p({ style:{ fontSize:'22px', fontWeight:'700' } }, d.name));
+  wrap.append(p({ style:{ fontSize:'13px', color:t.sub, marginTop:'3px', marginBottom:'24px' } },
+    `${d.lang1} ↔ ${d.lang2} · ${d.cards.length} Karten`));
+
+  // add card box
+  const box = card$();
+  box.append(p({ style:{ fontSize:'13px', fontWeight:'600', color:t.sub, marginBottom:'14px' } }, 'Karte hinzufügen'));
+  const col = div({ style:{ display:'flex', flexDirection:'column', gap:'10px' } });
+  const frontI = styledInput(d.lang1, state.newCard.front, v => state.newCard.front = v);
+  const backI  = styledInput(d.lang2, state.newCard.back,  v => state.newCard.back  = v, addCard);
+  const addB   = styledBtn('primary', {}, 'Hinzufügen');
+  addB.addEventListener('click', addCard);
+  col.append(frontI, backI, addB);
+  box.append(col);
+  wrap.append(box);
+
+  // card list
+  if (d.cards.length > 0) {
+    wrap.append(div({ style:{ height:'1px', background:t.muted, margin:'20px 0' } }));
+    wrap.append(label$('Alle Karten'));
+    const list = div({ style:{ display:'flex', flexDirection:'column', gap:'8px' } });
+    d.cards.forEach(c => {
+      const row = card$({ padding:'13px 16px', display:'flex', justifyContent:'space-between', alignItems:'center' });
+      const txt = div({});
+      txt.append(p({ style:{ fontWeight:'500', fontSize:'14px' } }, c.front));
+      txt.append(p({ style:{ color:t.sub, fontSize:'13px', marginTop:'2px' } }, c.back));
+      row.append(txt);
+      const delB = styledBtn('danger', { padding:'7px 12px', fontSize:'13px' }, '✕');
+      delB.addEventListener('click', () => deleteCard(d.id, c.id));
+      row.append(delB);
+      list.append(row);
+    });
+    wrap.append(list);
+    wrap.append(div({ style:{ height:'1px', background:t.muted, margin:'20px 0' } }));
+    const learnB = styledBtn('primary', { width:'100%', padding:'13px', fontSize:'15px' }, 'Lernen starten');
+    learnB.addEventListener('click', () => startStudy(d));
+    wrap.append(learnB);
+  }
+  return wrap;
+}
+
+function viewStudy() {
+  const t = T();
+  const d = deck();
+  const c = card();
+  if (!d||!c) return div({});
+  const wrap = div({});
+
+  // top row: back + typing toggle
+  const topRow = div({ style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px' } });
+  topRow.append(backBtn('← Verlassen', () => setState({ view:'home' })));
+  const toggleWrap = div({ style:{ display:'flex', alignItems:'center', gap:'8px' } });
+  toggleWrap.append(span({ style:{ fontSize:'12px', color:t.sub } }, 'Tippen'));
+  const track = div({ style:{ width:'38px', height:'22px', borderRadius:'11px',
+    background: state.typingMode ? t.accent : t.muted, cursor:'pointer', position:'relative', transition:'background .2s' } });
+  const thumb = div({ style:{ position:'absolute', top:'3px', left: state.typingMode?'18px':'3px',
+    width:'16px', height:'16px', borderRadius:'50%', background:'#fff', transition:'left .2s', boxShadow:'0 1px 3px rgba(0,0,0,.15)' } });
+  track.append(thumb);
+  track.addEventListener('click', () => setState({ typingMode:!state.typingMode, typed:'', checked:false, correct:null, flipped:false }));
+  toggleWrap.append(track);
+  topRow.append(toggleWrap);
+  wrap.append(topRow);
+
+  // deck name + counter
+  const meta = div({ style:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' } });
+  meta.append(p({ style:{ fontSize:'15px', fontWeight:'600' } }, d.name));
+  meta.append(p({ style:{ fontSize:'13px', color:t.sub } }, `${state.cardIdx+1} / ${d.cards.length}`));
+  wrap.append(meta);
+
+  // progress
+  const progBg   = div({ style:{ height:'4px', borderRadius:'4px', background:t.muted, marginBottom:'24px' } });
+  const progFill = div({ style:{ height:'100%', borderRadius:'4px', background:t.accent,
+    width:`${((state.cardIdx+1)/d.cards.length)*100}%`, transition:'width .4s' } });
+  progBg.append(progFill);
+  wrap.append(progBg);
+
+  if (!state.typingMode) {
+    // ── FLASHCARD ──
+    const flipWrap  = div({ class:'flip-wrap' });
+    const flipInner = div({ class:`flip-inner${state.flipped?' flipped':''}` });
+
+    const front = div({ class:'flip-face',
+      style:{ background:t.surface, border:`1px solid ${t.muted}` } });
+    front.append(p({ style:{ fontSize:'11px', fontWeight:'600', color:t.sub, letterSpacing:'1px',
+      textTransform:'uppercase', marginBottom:'14px' } }, d.lang1));
+    front.append(p({ class:'serif', style:{ fontSize:'24px', fontWeight:'600', lineHeight:'1.3', color:t.text } }, c.front));
+    front.append(p({ style:{ fontSize:'11px', color:t.sub, marginTop:'18px' } }, 'antippen zum Umdrehen'));
+
+    const back = div({ class:'flip-face flip-back',
+      style:{ background:`${t.accent}15`, border:`1px solid ${t.accent}40` } });
+    back.append(p({ style:{ fontSize:'11px', fontWeight:'600', color:t.accent, letterSpacing:'1px',
+      textTransform:'uppercase', marginBottom:'14px' } }, d.lang2));
+    back.append(p({ class:'serif', style:{ fontSize:'24px', fontWeight:'600', lineHeight:'1.3', color:t.text } }, c.back));
+
+    flipInner.append(front, back);
+    flipWrap.append(flipInner);
+    flipWrap.addEventListener('click', () => {
+      if (!state.flipped) recordAnswer(true);
+      setState({ flipped:!state.flipped });
+    });
+    wrap.append(flipWrap);
+
+  } else {
+    // ── TYPING MODE ──
+    const box = card$({ padding:'28px 24px' });
+    box.append(p({ style:{ fontSize:'11px', fontWeight:'600', color:t.sub, letterSpacing:'1px',
+      textTransform:'uppercase', marginBottom:'10px' } }, d.lang1));
+    box.append(p({ class:'serif', style:{ fontSize:'22px', fontWeight:'600', marginBottom:'24px', color:t.text } }, c.front));
+    box.append(p({ style:{ fontSize:'11px', fontWeight:'600', color:t.sub, letterSpacing:'1px',
+      textTransform:'uppercase', marginBottom:'8px' } }, d.lang2));
+
+    if (!state.checked) {
+      const ti = styledInput('Übersetzung eingeben…', state.typed, v => state.typed = v, checkTyped);
+      const cb = styledBtn('primary', { width:'100%', marginTop:'12px', opacity: state.typed.trim()?'1':'0.4' }, 'Prüfen');
+      cb.addEventListener('click', checkTyped);
+      box.append(ti, cb);
+      setTimeout(() => ti.focus(), 50);
+    } else {
+      const ok = state.correct;
+      const fb = card$({ padding:'14px 16px',
+        borderColor: ok ? `${t.accent}60` : '#E8C0BD',
+        background:  ok ? `${t.accent}12` : '#FDF0EF' });
+      fb.style.border = `1px solid ${ok ? t.accent+'60' : '#E8C0BD'}`;
+      fb.append(p({ style:{ fontSize:'13px', fontWeight:'600', color: ok?t.accent:'#C0635B',
+        marginBottom: ok?'0':'6px' } }, ok?'Richtig':'Nicht ganz'));
+      if (!ok) fb.append(p({ style:{ fontSize:'14px', color:t.text } }, `→ ${c.back}`));
+      box.append(fb);
+    }
+    wrap.append(box);
+  }
+
+  // nav buttons
+  const nav = div({ style:{ display:'flex', gap:'10px', marginTop:'20px' } });
+  const prevB = styledBtn('ghost', { flex:'1' }, '←');
+  const randB = styledBtn('ghost', { padding:'11px 16px' }, '⇄');
+  const nextB = styledBtn('primary', { flex:'1' }, '→');
+  prevB.addEventListener('click', () => advance(-1));
+  randB.addEventListener('click', () => advance('rand'));
+  nextB.addEventListener('click', () => advance(1));
+  nav.append(prevB, randB, nextB);
+  wrap.append(nav);
+  return wrap;
+}
+
+function viewStats() {
+  const t = T();
+  const wrap = div({});
+  wrap.append(backBtn('← Zurück', () => setState({ view:'home' })));
+  wrap.append(p({ style:{ fontSize:'22px', fontWeight:'700' } }, 'Statistik'));
+  wrap.append(p({ style:{ fontSize:'13px', color:t.sub, marginTop:'3px', marginBottom:'28px' } }, 'Dein Lernverlauf'));
+
+  // all-time
+  const { seen, correct } = allTimeStats();
+  const pct = seen > 0 ? Math.round((correct/seen)*100) : 0;
+  const grid = div({ style:{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'24px' } });
+  [['Gesamt',seen],['Richtig',correct],['Quote',`${pct}%`]].forEach(([label,val]) => {
+    const c$ = card$({ padding:'16px', textAlign:'center' });
+    c$.append(p({ style:{ fontSize:'22px', fontWeight:'700', color:t.accent } }, String(val)));
+    c$.append(p({ style:{ fontSize:'11px', color:t.sub, marginTop:'4px', fontWeight:'500' } }, label));
+    grid.append(c$);
+  });
+  wrap.append(grid);
+
+  // 7-day chart
+  const chartBox = card$();
+  chartBox.append(label$('Letzte 7 Tage'));
+  const days = last7();
+  const maxSeen = Math.max(...days.map(d=>d.seen), 1);
+  const chartRow = div({ style:{ display:'flex', gap:'6px', alignItems:'flex-end', height:'80px' } });
+  days.forEach(d => {
+    const col = div({ style:{ flex:'1', display:'flex', flexDirection:'column', alignItems:'center', gap:'5px', height:'100%' } });
+    const stack = div({ style:{ flex:'1', width:'100%', display:'flex', flexDirection:'column', justifyContent:'flex-end' } });
+    if (d.seen > 0) {
+      const inner = div({ style:{ width:'100%', borderRadius:'6px 6px 0 0', overflow:'hidden' } });
+      inner.append(div({ style:{ height:`${(d.correct/maxSeen)*60}px`, background:t.accent, transition:'height .4s' } }));
+      inner.append(div({ style:{ height:`${((d.seen-d.correct)/maxSeen)*60}px`, background:t.muted } }));
+      stack.append(inner);
+    } else {
+      stack.append(div({ style:{ height:'4px', background:t.muted, borderRadius:'4px', width:'100%' } }));
+    }
+    col.append(stack);
+    col.append(p({ style:{ fontSize:'10px', color:t.sub, fontWeight:'500' } }, d.label));
+    chartRow.append(col);
+  });
+  chartBox.append(chartRow);
+
+  const legend = div({ style:{ display:'flex', gap:'16px', marginTop:'14px' } });
+  [['Richtig',t.accent],['Falsch',t.muted]].forEach(([lbl,clr]) => {
+    const row = div({ style:{ display:'flex', alignItems:'center', gap:'6px' } });
+    row.append(div({ style:{ width:'10px', height:'10px', borderRadius:'2px', background:clr } }));
+    row.append(span({ style:{ fontSize:'11px', color:t.sub } }, lbl));
+    legend.append(row);
+  });
+  chartBox.append(legend);
+  wrap.append(chartBox);
+
+  // deck list
+  if (state.decks.length > 0) {
+    const deckBox = card$({ marginTop:'14px' });
+    deckBox.append(label$('Decks'));
+    state.decks.forEach((d,i) => {
+      const row = div({ style:{ display:'flex', justifyContent:'space-between', alignItems:'center',
+        padding:'10px 0', borderBottom: i<state.decks.length-1?`1px solid ${t.muted}`:'none' } });
+      row.append(p({ style:{ fontSize:'14px', fontWeight:'500' } }, d.name));
+      row.append(p({ style:{ fontSize:'13px', color:t.sub } }, `${d.cards.length} Karten`));
+      deckBox.append(row);
+    });
+    wrap.append(deckBox);
+  }
+  return wrap;
+}
+
+function viewSettings() {
+  const t = T();
+  const wrap = div({});
+  wrap.append(backBtn('← Zurück', () => setState({ view:'home' })));
+  wrap.append(p({ style:{ fontSize:'22px', fontWeight:'700' } }, 'Design'));
+  wrap.append(p({ style:{ fontSize:'13px', color:t.sub, marginTop:'3px', marginBottom:'28px' } }, 'Farbpalette wählen'));
+
+  const grid = div({ style:{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'12px' } });
+  THEMES.forEach(theme => {
+    const tile = div({ style:{ background:theme.surface,
+      border:`2px solid ${state.themeId===theme.id?theme.accent:theme.muted}`,
+      borderRadius:'16px', padding:'18px 14px', cursor:'pointer',
+      transition:'all .15s', textAlign:'center' } });
+    tile.append(div({ style:{ width:'36px', height:'36px', borderRadius:'50%', background:theme.accent,
+      margin:'0 auto 10px', boxShadow:`0 2px 8px ${theme.accent}40` } }));
+    tile.append(p({ style:{ fontSize:'13px', fontWeight:'600', color:theme.text } }, theme.label));
+    tile.addEventListener('click', () => { state.themeId = theme.id; persist(); render(); });
+    grid.append(tile);
+  });
+  wrap.append(grid);
+
+  wrap.append(div({ style:{ height:'1px', background:t.muted, margin:'32px 0 24px' } }));
+  wrap.append(label$('Daten sichern'));
+
+  const exportB = styledBtn('ghost', { width:'100%', padding:'13px', fontSize:'14px',
+    display:'flex', justifyContent:'space-between', alignItems:'center' }, '');
+  exportB.append(span({}, 'Decks exportieren'));
+  exportB.append(span({ style:{ fontSize:'12px', opacity:'0.6' } }, '.json ↓'));
+  exportB.addEventListener('click', exportDecks);
+  wrap.append(exportB);
+
+  const importLbl = h('label', { style:{ display:'flex', justifyContent:'space-between', alignItems:'center',
+    padding:'13px', borderRadius:'14px', border:`1px solid ${t.muted}`, cursor:'pointer',
+    fontSize:'14px', color:t.sub, marginTop:'10px' } },
+    span({}, 'Decks importieren'),
+    span({ style:{ fontSize:'12px', opacity:'0.6' } }, '.json ↑')
+  );
+  const fileInput = h('input', { type:'file', accept:'.json', style:{ display:'none' } });
+  fileInput.addEventListener('change', importDecks);
+  importLbl.append(fileInput);
+  wrap.append(importLbl);
+
+  const hint = card$({ marginTop:'12px', padding:'14px 16px' });
+  hint.append(p({ style:{ fontSize:'12px', color:t.sub, lineHeight:'1.7' } },
+    'Export speichert alle Decks als .json-Datei auf dein Gerät. Beim Import werden nur neue Decks hinzugefügt.'));
+  wrap.append(hint);
+  return wrap;
+}
+
+// ─── Render ─────────────────────────────────────────────────────
+function render() {
+  const t = T();
+  const app = document.getElementById('app');
+  app.style.background = t.bg;
+  app.style.color = t.text;
+  app.innerHTML = '';
+
+  const inner = div({ style:{ maxWidth:'420px', margin:'0 auto', padding:'48px 20px 100px' } });
+
+  // ── Header ──
+  const header = div({ style:{ display:'flex', justifyContent:'space-between',
+    alignItems:'center', marginBottom:'32px' } });
+  const title = div({});
+  title.append(p({ class:'serif', style:{ fontSize:'26px', fontStyle:'italic', fontWeight:'400',
+    letterSpacing:'-0.4px', color:t.text } }, 'Vokabeln'));
+  header.append(title);
+  const navBtns = div({ style:{ display:'flex', gap:'8px' } });
+
+  const statsB = styledBtn('ghost', { padding:'8px 14px', fontSize:'13px' }, 'Statistik');
+  statsB.addEventListener('click', () => setState({ view: state.view==='stats'?'home':'stats' }));
+  const designB = styledBtn('ghost', { padding:'8px 14px', fontSize:'13px' }, 'Design');
+  designB.addEventListener('click', () => setState({ view: state.view==='settings'?'home':'settings' }));
+  navBtns.append(statsB, designB);
+  header.append(navBtns);
+  inner.append(header);
+
+  // ── View ──
+  const views = { home:viewHome, addDeck:viewAddDeck, manage:viewManage,
+                  study:viewStudy, stats:viewStats, settings:viewSettings };
+  inner.append((views[state.view]||viewHome)());
+
+  app.append(inner);
+}
+
+render();
+</script>
+</body>
+</html>
